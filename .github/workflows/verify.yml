@@ -1,0 +1,68 @@
+name: Verify forms
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+  schedule:
+    # Weekly, so upstream drift surfaces here and not in a user project.
+    - cron: "0 6 * * 1"
+
+permissions:
+  # Render and build only; nothing here writes to the repository.
+  contents: read
+
+concurrency:
+  group: verify-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  forms:
+    name: ${{ matrix.form }} (${{ matrix.combo.name }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        form: [wxt-svelte]
+        combo:
+          - { name: full, preset: full }
+          - { name: minimal, preset: minimal }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Templetry/.github/actions/setup-templetry@main
+      - name: Render
+        run: |
+          templetry render --template "./${{ matrix.form }}" --out "$RUNNER_TEMP/out" \
+            --set "project_name=Verify App" --preset "${{ matrix.combo.preset }}"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Build rendered output
+        working-directory: ${{ runner.temp }}/out
+        run: |
+          npm install
+          npm run build
+      - name: Test rendered output
+        working-directory: ${{ runner.temp }}/out
+        run: npm test
+      # The exit code cannot tell a preset that dropped its entrypoints from one
+      # that kept them, so read the manifest WXT derived from what was rendered.
+      - name: Prove the extension has what the preset promised
+        working-directory: ${{ runner.temp }}/out
+        run: |
+          test -f .output/chrome-mv3/manifest.json
+          if [ "${{ matrix.combo.preset }}" = full ]; then
+            grep -q options_ui .output/chrome-mv3/manifest.json
+            grep -q content_scripts .output/chrome-mv3/manifest.json
+          else
+            ! grep -q options_ui .output/chrome-mv3/manifest.json
+            ! grep -q content_scripts .output/chrome-mv3/manifest.json
+          fi
+
+  agents:
+    name: AGENTS.md matches the manifests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Templetry/.github/actions/check-agents@main
